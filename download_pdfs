@@ -1,0 +1,104 @@
+import csv
+import subprocess
+import time
+from pathlib import Path
+from urllib.parse import unquote, urlparse
+
+script_dir = Path(__file__).resolve().parent
+csv_path = script_dir / "Front Range Community College-Improve PDF accessibility-Table_fixed.csv"
+output_dir = Path.home() / "Downloads" / "FRCC_PDFs"
+output_dir.mkdir(parents=True, exist_ok=True)
+
+seen_urls = set()
+downloaded = 0
+failed = 0
+
+
+def available_path(filename):
+    path = output_dir / filename
+    counter = 2
+
+    while path.exists():
+        path = output_dir / f"{Path(filename).stem}_{counter}{Path(filename).suffix}"
+        counter += 1
+
+    return path
+
+
+with csv_path.open("r", newline="", encoding="utf-8-sig") as csv_file:
+    reader = csv.DictReader(csv_file)
+
+    if not reader.fieldnames:
+        raise ValueError("The CSV has no header row.")
+
+    # The CSV headers contain surrounding spaces, such as " URL ".
+    reader.fieldnames = [name.strip() for name in reader.fieldnames]
+
+    if "URL" not in reader.fieldnames:
+        raise ValueError(f"No URL column found. Headers: {reader.fieldnames}")
+
+    for row_number, row in enumerate(reader, start=2):
+        url = (row.get("URL") or "").strip()
+
+        if not url:
+            print(f"Row {row_number}: blank URL; skipped")
+            continue
+
+        if url in seen_urls:
+            print(f"Row {row_number}: duplicate URL; skipped")
+            continue
+        seen_urls.add(url)
+
+        filename = Path(unquote(urlparse(url).path)).name
+        if filename in {"", ".", ".."}:
+            filename = f"document_{row_number}.pdf"
+
+        destination = available_path(filename)
+
+        try:
+            result = subprocess.run(
+                [
+                    "/usr/bin/curl",
+                    "--fail",
+                    "--location",
+                    "--silent",
+                    "--show-error",
+                    "--output",
+                    str(destination),
+                    url,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+
+            if result.returncode != 0:
+                print(f"Failed: {url} ({result.stderr.strip()})")
+                failed += 1
+                destination.unlink(missing_ok=True)
+            else:
+                with destination.open("rb") as pdf_file:
+                    is_pdf = b"%PDF-" in pdf_file.read(1024)
+
+                if is_pdf:
+                    print(f"Saved: {destination}")
+                    downloaded += 1
+                else:
+                    print(f"Response was not a PDF: {url}")
+                    failed += 1
+                    destination.unlink(missing_ok=True)
+
+        except subprocess.TimeoutExpired:
+            print(f"Timed out: {url}")
+            failed += 1
+            destination.unlink(missing_ok=True)
+
+        except OSError as error:
+            print(f"Download error for {url}: {error}")
+            failed += 1
+            destination.unlink(missing_ok=True)
+
+        time.sleep(3)
+
+print(f"Finished. Downloaded: {downloaded}; failed: {failed}")
+print(f"Folder: {output_dir}")
