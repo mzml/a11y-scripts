@@ -15,6 +15,10 @@ failed = 0
 
 
 def available_path(filename):
+    """
+    Returns a Path object for a filename in the output directory that does not already exist.
+    If the filename already exists, appends a counter to the filename until an available name is found.
+    """
     path = output_dir / filename
     counter = 2
 
